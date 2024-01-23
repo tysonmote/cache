@@ -10,7 +10,7 @@ import (
 type Cache[K comparable, V any] interface {
 	Get(key K) (v V, ok bool)
 	Set(key K, value V)
-	Remove(key K)
+	Remove(key K) bool
 }
 
 func TestCache(create func(size int) Cache[int, int]) error {
@@ -116,12 +116,41 @@ func BenchmarkCache(b *testing.B, create func(size int) Cache[int, int]) {
 		})
 	})
 
+	b.Run("set miss", func(b *testing.B) {
+		c := create(size)
+
+		b.RunParallel(func(p *testing.PB) {
+			counter := 0
+			for p.Next() {
+				c.Set(counter, counter)
+				counter++
+			}
+		})
+	})
+
+	b.Run("set hit", func(b *testing.B) {
+		c := create(size)
+
+		// Fill cache
+		for i := 0; i < size; i++ {
+			c.Set(i, i)
+		}
+
+		b.ResetTimer()
+
+		b.RunParallel(func(p *testing.PB) {
+			for p.Next() {
+				c.Set(0, 0)
+			}
+		})
+	})
+
 	b.Run("zipf", func(b *testing.B) {
 		c := create(size)
 
 		rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-		z := rand.NewZipf(rng, 1.0001, 10, 1_000_000)
-		keys := make([]int, 1_000_000)
+		z := rand.NewZipf(rng, 1.0001, 10, uint64(size*2))
+		keys := make([]int, uint64(size*2))
 		for i := range keys {
 			keys[i] = int(z.Uint64())
 		}

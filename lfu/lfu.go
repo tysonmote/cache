@@ -130,14 +130,17 @@ func (c *Cache[K, V]) evict() {
 	}
 }
 
-func (c *Cache[K, V]) Remove(key K) {
+func (c *Cache[K, V]) Remove(key K) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if i, ok := c.index[key]; ok {
 		delete(c.index, key)
 		delete(c.buckets[i], key)
+		return true
 	}
+
+	return false
 }
 
 func (c *Cache[K, V]) Len() int {

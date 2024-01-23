@@ -2,7 +2,7 @@
 
 This repo holds multiple cache algorithm implementations in Go, with an emphasis
 on algorithms that make novel trade-offs compared to the popular LRU algorithms
-in [`hashicorp/golang-lru`][golang-lru.]
+in [`hashicorp/golang-lru`][golang-lru].
 
 This repo also includes tools for benchmarking throughput and hit ratio using
 commonly-used test traces.
@@ -20,6 +20,9 @@ TODO
 go test ./bench -bench=. -benchmem
 
 # Hit ratios
+TODO
+
+# Memory overhead
 TODO
 ```
 
