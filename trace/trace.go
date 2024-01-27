@@ -3,11 +3,21 @@ package trace
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
+	"errors"
+	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strconv"
 )
 
-type Trace interface {
+type Trace struct {
+	r       reader
+	closers []io.Closer
+}
+
+type reader interface {
 	Read(k []Key) (n int, err error)
 }
 
@@ -16,14 +26,53 @@ type Key struct {
 	N   int
 }
 
-const (
-	DS1Trace  = "ds1.arc.gz"
-	LoopTrace = "loop.lirs.gz"
-	OLTPTrace = "oltp.arc.gz"
-	P3Trace   = "p3.arc.gz"
-	P8Trace   = "p8.arc.gz"
-	S3Trace   = "s3.arc.gz"
-)
+// Open opens a trace file at the given path and returns a Trace. The file may
+// be gzipped. The file type is determined by the file extension.
+func Open(path string) (*Trace, error) {
+	trace := &Trace{}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	trace.closers = append(trace.closers, f)
+
+	var r io.Reader = f
+
+	if filepath.Ext(path) == ".gz" {
+		r, err = gzip.NewReader(f)
+		if err != nil {
+			return nil, err
+		}
+		trace.closers = append(trace.closers, r.(io.Closer))
+		path = path[:len(path)-3]
+	}
+
+	switch filepath.Ext(path) {
+	case ".arc":
+		trace.r = newARCReader(r)
+	case ".lirs":
+		trace.r = newLIRSReader(r)
+	default:
+		return nil, fmt.Errorf("unknown trace file type: %s" + filepath.Ext(path))
+	}
+
+	return trace, nil
+}
+
+func (t *Trace) Read(k []Key) (n int, err error) {
+	return t.r.Read(k)
+}
+
+func (t *Trace) Close() error {
+	var errs []error
+	for i := len(t.closers) - 1; i >= 0; i-- {
+		if err := t.closers[i].Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
 
 // TODO: https://scinapse.io/papers/1860107648
 //
