@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"unsafe"
 )
 
 type Trace struct {
@@ -18,12 +19,7 @@ type Trace struct {
 }
 
 type reader interface {
-	Read(k []Key) (n int, err error)
-}
-
-type Key struct {
-	Key int
-	N   int
+	Read(k []int) (n int, err error)
 }
 
 // Open opens a trace file at the given path and returns a Trace. The file may
@@ -60,7 +56,7 @@ func Open(path string) (*Trace, error) {
 	return trace, nil
 }
 
-func (t *Trace) Read(k []Key) (n int, err error) {
+func (t *Trace) Read(k []int) (n int, err error) {
 	return t.r.Read(k)
 }
 
@@ -84,6 +80,8 @@ func (t *Trace) Close() error {
 // [1]: https://scinapse.io/papers/1860107648
 type arcReader struct {
 	scanner *bufio.Scanner
+	k       int
+	n       int
 }
 
 func newARCReader(r io.Reader) *arcReader {
@@ -93,28 +91,29 @@ func newARCReader(r io.Reader) *arcReader {
 
 var arcSep = []byte(" ")
 
-func (r *arcReader) Read(k []Key) (n int, err error) {
-	for i := range k {
-		if !r.scanner.Scan() {
-			return i, r.scanner.Err()
+func (r *arcReader) Read(keys []int) (n int, err error) {
+	for i := range keys {
+		for r.n == 0 {
+			if !r.scanner.Scan() {
+				return i, r.scanner.Err()
+			}
+
+			line := r.scanner.Bytes()
+			r.k, line = chompInt(line)
+			r.n, _ = chompInt(line)
 		}
 
-		line := r.scanner.Bytes()
-		key, line := chompInt(line)
-		n, line := chompInt(line)
-
-		k[i] = Key{
-			Key: key,
-			N:   n,
-		}
+		keys[i] = r.k
+		r.k++
+		r.n--
 	}
 
-	return len(k), nil
+	return len(keys), nil
 }
 
 func chompInt(line []byte) (int, []byte) {
 	sep := bytes.Index(line, arcSep)
-	n, _ := strconv.Atoi(string(line[:sep]))
+	n, _ := strconv.Atoi(unsafe.String(&line[0], sep))
 	return n, line[sep+1:]
 }
 
@@ -134,20 +133,15 @@ func newLIRSReader(r io.Reader) *lirsReader {
 	return &lirsReader{scanner: scanner}
 }
 
-func (r *lirsReader) Read(k []Key) (n int, err error) {
-	for i := range k {
+func (r *lirsReader) Read(keys []int) (n int, err error) {
+	for i := range keys {
 		if !r.scanner.Scan() {
 			return i, r.scanner.Err()
 		}
 
 		line := r.scanner.Bytes()
-		key, _ := strconv.Atoi(string(line))
-
-		k[i] = Key{
-			Key: key,
-			N:   1,
-		}
+		keys[i], _ = strconv.Atoi(unsafe.String(&line[0], len(line)))
 	}
 
-	return len(k), nil
+	return len(keys), nil
 }
