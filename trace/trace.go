@@ -13,6 +13,8 @@ import (
 	"unsafe"
 )
 
+// Trace is a trace file that contains a sequence of integers representing a
+// sequence of cache accesses.
 type Trace struct {
 	r       reader
 	closers []io.Closer
@@ -22,8 +24,7 @@ type reader interface {
 	Read(k []int) (n int, err error)
 }
 
-// Open opens a trace file at the given path and returns a Trace. The file may
-// be gzipped. The file type is determined by the file extension.
+// Open opens a Trace file at the given path. The file may be gzipped. The file type is determined by the file extension.
 func Open(path string) (*Trace, error) {
 	trace := &Trace{}
 
@@ -56,10 +57,14 @@ func Open(path string) (*Trace, error) {
 	return trace, nil
 }
 
+// Read reads up to len(k) integers from the trace file into k. It returns the
+// number of integers read and any error encountered. If the number of integers
+// read is less than len(k), err will be io.EOF.
 func (t *Trace) Read(k []int) (n int, err error) {
 	return t.r.Read(k)
 }
 
+// Close releases any resources associated with the Trace.
 func (t *Trace) Close() error {
 	var errs []error
 	for i := len(t.closers) - 1; i >= 0; i-- {
@@ -70,14 +75,7 @@ func (t *Trace) Close() error {
 	return errors.Join(errs...)
 }
 
-// TODO: https://scinapse.io/papers/1860107648
-//
-// ParseARC takes a single line of input from an ARC trace file as described in
-// "ARC: a self-tuning, low overhead replacement cache" [1] by Nimrod Megiddo
-// and Dharmendra S. Modha [1] and returns a sequence of numbers generated from
-// the line and any error. For use with NewReader.
-//
-// [1]: https://scinapse.io/papers/1860107648
+// arcReader reads ARC trace files: https://scinapse.io/papers/1860107648
 type arcReader struct {
 	scanner *bufio.Scanner
 	k       int
@@ -94,13 +92,21 @@ var arcSep = []byte(" ")
 func (r *arcReader) Read(keys []int) (n int, err error) {
 	for i := range keys {
 		for r.n == 0 {
-			if !r.scanner.Scan() {
-				return i, r.scanner.Err()
+			line, err := readLine(r.scanner)
+			if err != nil {
+				return i, err
 			}
 
-			line := r.scanner.Bytes()
-			r.k, line = chompInt(line)
-			r.n, _ = chompInt(line)
+			k, remain, ok := chompInt(line)
+			if !ok {
+				return i, fmt.Errorf("invalid line: %q", line)
+			}
+			r.k = k
+
+			r.n, _, ok = chompInt(remain)
+			if !ok {
+				return i, fmt.Errorf("invalid line: %q", line)
+			}
 		}
 
 		keys[i] = r.k
@@ -111,19 +117,22 @@ func (r *arcReader) Read(keys []int) (n int, err error) {
 	return len(keys), nil
 }
 
-func chompInt(line []byte) (int, []byte) {
+func chompInt(line []byte) (int, []byte, bool) {
 	sep := bytes.Index(line, arcSep)
-	n, _ := strconv.Atoi(unsafe.String(&line[0], sep))
-	return n, line[sep+1:]
+	if sep == -1 {
+		return 0, nil, false
+	}
+
+	n, err := strconv.Atoi(unsafe.String(&line[0], sep))
+	if err != nil {
+		return 0, nil, false
+	}
+
+	return n, line[sep+1:], true
 }
 
-// ParseLIRS takes a single line of input from a LIRS trace file as described in
-// multiple papers [1] and returns a slice containing one number. A nice
-// collection of LIRS trace files can be found in Ben Manes' repo [2].
-//
-// [1]: https://en.wikipedia.org/wiki/LIRS_caching_algorithm
-// [2]: https://git.io/fj9gU
-
+// lirsReader reads LIRS trace files:
+// https://github.com/ben-manes/caffeine/tree/master/simulator/src/main/resources/com/github/benmanes/caffeine/cache/simulator/parser/lirs
 type lirsReader struct {
 	scanner *bufio.Scanner
 }
@@ -135,13 +144,37 @@ func newLIRSReader(r io.Reader) *lirsReader {
 
 func (r *lirsReader) Read(keys []int) (n int, err error) {
 	for i := range keys {
-		if !r.scanner.Scan() {
-			return i, r.scanner.Err()
+		line, err := readLine(r.scanner)
+		if err != nil {
+			return i, err
 		}
 
-		line := r.scanner.Bytes()
-		keys[i], _ = strconv.Atoi(unsafe.String(&line[0], len(line)))
+		k, err := strconv.Atoi(unsafe.String(&line[0], len(line)))
+		if err != nil {
+			return i, err
+		}
+
+		keys[i] = k
 	}
 
 	return len(keys), nil
+}
+
+func readLine(s *bufio.Scanner) ([]byte, error) {
+	for {
+		if !s.Scan() {
+			if err := s.Err(); err == nil {
+				return nil, io.EOF
+			} else {
+				return nil, err
+			}
+		}
+
+		line := s.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		return line, nil
+	}
 }

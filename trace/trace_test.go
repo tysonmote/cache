@@ -2,10 +2,121 @@ package trace
 
 import (
 	"fmt"
+	"io"
+	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
-const arc = `147727 8 0 0
+func TestARCReader(t *testing.T) {
+	t.Run("valid", func(t *testing.T) {
+		r := newARCReader(strings.NewReader(`
+1 1 0 0
+10 3 0 1
+100 2 0 2
+`))
+
+		var k [4]int
+		n, err := r.Read(k[:])
+		assert.NoError(t, err)
+		assert.Equal(t, 4, n)
+		assert.Equal(t, []int{1, 10, 11, 12}, k[:n])
+
+		n, err = r.Read(k[:])
+		assert.Equal(t, io.EOF, err)
+		assert.Equal(t, 2, n)
+		assert.Equal(t, []int{100, 101}, k[:n])
+	})
+
+	t.Run("invalid", func(t *testing.T) {
+		r := newARCReader(strings.NewReader("1"))
+		n, err := r.Read(make([]int, 1))
+		assert.ErrorContains(t, err, `invalid line: "1"`)
+		assert.Equal(t, 0, n)
+
+		r = newARCReader(strings.NewReader("1 b 2 3"))
+		n, err = r.Read(make([]int, 1))
+		assert.ErrorContains(t, err, `invalid line: "1 b 2 3"`)
+		assert.Equal(t, 0, n)
+	})
+}
+
+func TestLIRSReader(t *testing.T) {
+	t.Run("valid", func(t *testing.T) {
+		r := newLIRSReader(strings.NewReader(`
+1
+10
+100
+`))
+
+		var k [2]int
+		n, err := r.Read(k[:])
+		assert.NoError(t, err)
+		assert.Equal(t, 2, n)
+		assert.Equal(t, []int{1, 10}, k[:n])
+
+		n, err = r.Read(k[:])
+		assert.Equal(t, io.EOF, err)
+		assert.Equal(t, 1, n)
+		assert.Equal(t, []int{100}, k[:n])
+	})
+}
+
+// loopReader is a Reader that reads from a string forever in a loop.
+type loopReader struct {
+	s string
+	i int
+}
+
+func (r *loopReader) Read(p []byte) (n int, err error) {
+	n = copy(p, r.s[r.i:])
+	r.i += n
+	if r.i == len(r.s) {
+		r.i = 0
+	}
+	return n, nil
+}
+
+func BenchmarkARCReader(b *testing.B) {
+	for _, n := range []int{10, 100, 1000} {
+		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
+			r := newARCReader(&loopReader{s: arcTrace})
+			keys := make([]int, n)
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				r.Read(keys)
+				if keys[0] == 0 {
+					b.Fatal("keys[0] == 0")
+				}
+			}
+
+			b.ReportMetric(float64(n*b.N)/float64(b.Elapsed().Milliseconds()), "keys/ms")
+		})
+	}
+}
+
+func BenchmarkLIRSReader(b *testing.B) {
+	for _, n := range []int{10, 100, 1000} {
+		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
+			r := newLIRSReader(&loopReader{s: lirsTrace})
+			keys := make([]int, n)
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				r.Read(keys)
+				if keys[0] == 0 {
+					b.Fatal("keys[0] == 0")
+				}
+			}
+
+			b.ReportMetric(float64(n*b.N)/float64(b.Elapsed().Milliseconds()), "keys/ms")
+		})
+	}
+}
+
+const arcTrace = `147727 8 0 0
 561486 1 0 1
 80147 25 0 2
 404350 5 0 3
@@ -107,7 +218,7 @@ const arc = `147727 8 0 0
 438230 8 0 99
 `
 
-const lirs = `147727
+const lirsTrace = `147727
 561486
 80147
 404350
@@ -208,56 +319,3 @@ const lirs = `147727
 438376
 438230
 `
-
-// loopReader is a Reader that reads from a string forever in a loop.
-type loopReader struct {
-	s string
-	i int
-}
-
-func (r *loopReader) Read(p []byte) (n int, err error) {
-	n = copy(p, r.s[r.i:])
-	r.i += n
-	if r.i == len(r.s) {
-		r.i = 0
-	}
-	return n, nil
-}
-
-func BenchmarkARCReader(b *testing.B) {
-	for _, n := range []int{1, 10, 100, 1000} {
-		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
-			r := newARCReader(&loopReader{s: arc})
-			keys := make([]int, n)
-			b.ResetTimer()
-
-			for i := 0; i < b.N; i++ {
-				r.Read(keys)
-				if keys[0] == 0 {
-					b.Fatal("keys[0] == 0")
-				}
-			}
-
-			b.ReportMetric(float64(n*b.N)/float64(b.Elapsed().Milliseconds()), "keys/ms")
-		})
-	}
-}
-
-func BenchmarkLIRSReader(b *testing.B) {
-	for _, n := range []int{1, 10, 100, 1000} {
-		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
-			r := newLIRSReader(&loopReader{s: lirs})
-			keys := make([]int, n)
-			b.ResetTimer()
-
-			for i := 0; i < b.N; i++ {
-				r.Read(keys)
-				if keys[0] == 0 {
-					b.Fatal("keys[0] == 0")
-				}
-			}
-
-			b.ReportMetric(float64(n*b.N)/float64(b.Elapsed().Milliseconds()), "keys/ms")
-		})
-	}
-}
