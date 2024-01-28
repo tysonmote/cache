@@ -131,8 +131,8 @@ func chompInt(line []byte) (int, []byte, bool) {
 	return n, line[sep+1:], true
 }
 
-// lirsReader reads LIRS trace files:
-// https://github.com/ben-manes/caffeine/tree/master/simulator/src/main/resources/com/github/benmanes/caffeine/cache/simulator/parser/lirs
+// lirsReader reads LIRS trace files from ben-manes/caffeine:
+// https://shorturl.at/esPS3 or http://tinyurl.com/yep9zj57
 type lirsReader struct {
 	scanner *bufio.Scanner
 }
