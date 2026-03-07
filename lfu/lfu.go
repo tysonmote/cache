@@ -68,7 +68,7 @@ func (c *Cache[K, V]) Get(key K) (v V, ok bool) {
 	// Cache hit
 	v = c.buckets[i][key]
 
-	// Probalistically "spill" the item to a more frequently accessed
+	// Probabilistically "spill" the item to a more frequently accessed
 	// bucket. First bucket is single-access items.
 	if i == 0 || (i < maxBucketIndex && c.rng.Float64() < math.Pow(promoteBase, float64(i))) {
 		c.promote(i, key)
