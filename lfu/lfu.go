@@ -19,6 +19,10 @@ const (
 // is not guaranteed to be the least frequently used item because Cache uses a
 // probabilistic approach to tracking item access frequency.
 //
+// Overwriting an existing key with Set resets that key's frequency to one
+// access; the key is moved to the lowest-frequency bucket as if it were newly
+// added.
+//
 // The probabilistic eviction policy is faster and more memory efficient than
 // the approach described in the "An O(1) algorithm for implementing the Cache
 // cache eviction scheme" paper: https://arxiv.org/pdf/2110.11602.pdf
@@ -83,10 +87,12 @@ func (c *Cache[K, V]) promote(i int8, key K) {
 	delete(c.buckets[i], key)
 }
 
-// Set adds a value to the cache. If the cache is full, an infrequently used
-// item is evicted. The item evicted is not guaranteed to be the least
-// frequently used item because LFU uses a probabilistic approach to tracking
-// item access frequency.
+// Set adds or updates a value in the cache. If the key already exists, its
+// value is updated and its access frequency is reset to one (the key is treated
+// as newly added for eviction purposes). If the cache is full and the key is
+// new, an infrequently used item is evicted. The item evicted is not guaranteed
+// to be the least frequently used item because LFU uses a probabilistic
+// approach to tracking item access frequency.
 func (c *Cache[K, V]) Set(key K, value V) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
