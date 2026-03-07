@@ -10,7 +10,9 @@ import (
 type Cache[K comparable, V any] interface {
 	Get(key K) (v V, ok bool)
 	Set(key K, value V)
+	Peek(key K) (v V, ok bool)
 	Remove(key K) bool
+	Clear()
 }
 
 func TestCache(create func(size int) Cache[int, int]) error {

@@ -81,6 +81,19 @@ func (c *Cache[K, V]) Get(key K) (v V, ok bool) {
 	return v, true
 }
 
+// Peek returns a value from the cache if it exists, without updating its
+// access frequency. If the value does not exist, ok is false.
+func (c *Cache[K, V]) Peek(key K) (v V, ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	i, ok := c.index[key]
+	if !ok {
+		return v, false
+	}
+	return c.buckets[i][key], true
+}
+
 func (c *Cache[K, V]) promote(i int8, key K) {
 	c.buckets[i+1][key] = c.buckets[i][key]
 	c.index[key] = i + 1
@@ -147,6 +160,17 @@ func (c *Cache[K, V]) Remove(key K) bool {
 	}
 
 	return false
+}
+
+// Clear removes all entries from the cache.
+func (c *Cache[K, V]) Clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.index = map[K]int8{}
+	for i := range c.buckets {
+		c.buckets[i] = map[K]V{}
+	}
 }
 
 func (c *Cache[K, V]) Len() int {

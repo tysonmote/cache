@@ -25,6 +25,14 @@ func (c *hashiLRU[K, V]) Set(k K, v V) {
 	c.Add(k, v)
 }
 
+func (c *hashiLRU[K, V]) Peek(k K) (v V, ok bool) {
+	return c.Cache.Peek(k)
+}
+
+func (c *hashiLRU[K, V]) Clear() {
+	c.Cache.Purge()
+}
+
 func BenchmarkHashicorpLRU(b *testing.B) {
 	cachetest.BenchmarkCache(b, func(size int) cachetest.Cache[int, int] {
 		c, err := lru.New[int, int](size)
@@ -48,6 +56,14 @@ func (c *hashi2Q[K, V]) Remove(k K) bool {
 	return true
 }
 
+func (c *hashi2Q[K, V]) Peek(k K) (v V, ok bool) {
+	return c.TwoQueueCache.Peek(k)
+}
+
+func (c *hashi2Q[K, V]) Clear() {
+	c.TwoQueueCache.Purge()
+}
+
 func BenchmarkHashicorp2Q(b *testing.B) {
 	cachetest.BenchmarkCache(b, func(size int) cachetest.Cache[int, int] {
 		c, err := lru.New2Q[int, int](size)
@@ -69,6 +85,14 @@ func (c *hashiARC[K, V]) Set(k K, v V) {
 func (c *hashiARC[K, V]) Remove(k K) bool {
 	c.ARCCache.Remove(k)
 	return true
+}
+
+func (c *hashiARC[K, V]) Peek(k K) (v V, ok bool) {
+	return c.ARCCache.Peek(k)
+}
+
+func (c *hashiARC[K, V]) Clear() {
+	c.ARCCache.Purge()
 }
 
 func BenchmarkHashicorpARC(b *testing.B) {
