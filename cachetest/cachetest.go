@@ -24,6 +24,10 @@ func TestCache(create func(size int) Cache[int, int]) error {
 		return err
 	}
 
+	if err := testCacheEvictionPolicy(create(2)); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -50,9 +54,14 @@ func testCacheBasic(c Cache[int, int]) error {
 		return fmt.Errorf("expected 2, got %d", v)
 	}
 
-	c.Remove(1)
+	if !c.Remove(1) {
+		return fmt.Errorf("expected Remove(1) to return true when key was present")
+	}
 	if _, ok := c.Get(1); ok {
 		return fmt.Errorf("expected cache miss after removal")
+	}
+	if c.Remove(1) {
+		return fmt.Errorf("expected Remove(1) to return false when key was absent")
 	}
 
 	return nil
@@ -70,6 +79,29 @@ func testCacheEviction(c Cache[int, int]) error {
 		return fmt.Errorf("expected cache hit")
 	}
 
+	return nil
+}
+
+// testCacheEvictionPolicy verifies that when the cache is full and a new key is
+// added, a less-frequently or less-recently used key is evicted (e.g. for LFU
+// the key with fewer accesses, for LRU the least recently used).
+func testCacheEvictionPolicy(c Cache[int, int]) error {
+	c.Set(1, 1)
+	c.Set(2, 2)
+	for i := 0; i < 100; i++ {
+		c.Get(1)
+	}
+	c.Set(3, 3)
+
+	if _, ok := c.Get(2); ok {
+		return fmt.Errorf("expected key 2 to be evicted (was less active than 1 and displaced by 3)")
+	}
+	if _, ok := c.Get(1); !ok {
+		return fmt.Errorf("expected key 1 to remain (was most active)")
+	}
+	if _, ok := c.Get(3); !ok {
+		return fmt.Errorf("expected key 3 to be present (newly added)")
+	}
 	return nil
 }
 
