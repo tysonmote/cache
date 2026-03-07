@@ -51,7 +51,7 @@ func Open(path string) (*Trace, error) {
 	case ".lirs":
 		trace.r = newLIRSReader(r)
 	default:
-		return nil, fmt.Errorf("unknown trace file type: %s" + filepath.Ext(path))
+		return nil, fmt.Errorf("unknown trace file type: %s", filepath.Ext(path))
 	}
 
 	return trace, nil
