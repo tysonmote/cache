@@ -15,6 +15,24 @@ func BenchmarkTysonmoteLFU(b *testing.B) {
 	})
 }
 
+func BenchmarkTysonmoteLFUSharded16(b *testing.B) {
+	cachetest.BenchmarkCache(b, func(size int) cachetest.Cache[int, int] {
+		return lfu.NewSharded[int, int](size, 16)
+	})
+}
+
+func BenchmarkTysonmoteLFUSharded64(b *testing.B) {
+	cachetest.BenchmarkCache(b, func(size int) cachetest.Cache[int, int] {
+		return lfu.NewSharded[int, int](size, 64)
+	})
+}
+
+func BenchmarkTysonmoteLFUSharded256(b *testing.B) {
+	cachetest.BenchmarkCache(b, func(size int) cachetest.Cache[int, int] {
+		return lfu.NewSharded[int, int](size, 256)
+	})
+}
+
 // External cache implementations
 
 type hashiLRU[K comparable, V any] struct {

@@ -1,10 +1,7 @@
 package lfu
 
 import (
-	"math"
-	"math/rand"
-	"sync"
-	"time"
+	"hash/maphash"
 )
 
 const (
@@ -12,6 +9,11 @@ const (
 	maxBucketIndex int8    = numBuckets - 1
 	promoteBase    float64 = 0.01
 )
+
+// minKeysPerShard avoids splitting a tiny total capacity across many stripes:
+// with one key per shard, distinct keys can collide on the same shard and
+// evict each other immediately. Larger caches still use up to numShards stripes.
+const minKeysPerShard = 64
 
 // Cache is a thread-safe, fixed-size, in-memory cache with a probabilistic
 // least-frequently-used eviction policy. If the cache is full and a new item is
@@ -26,89 +28,115 @@ const (
 // The probabilistic eviction policy is faster and more memory efficient than
 // the approach described in the "An O(1) algorithm for implementing the Cache
 // cache eviction scheme" paper: https://arxiv.org/pdf/2110.11602.pdf
+//
+// A Cache is implemented as one or more internal shards (stripes), each with
+// its own mutex. New uses a single shard. NewSharded uses multiple shards so
+// concurrent operations on different keys can proceed in parallel; eviction is
+// local to each shard. The effective stripe count is at most numShards and is
+// reduced when size is small so each shard holds at least minKeysPerShard keys
+// on average (except a single zero-capacity shard when size is 0).
 type Cache[K comparable, V any] struct {
-	size int
-	rng  *rand.Rand
-	mu   sync.Mutex
-
-	// promoteThreshold[i] is the probability threshold for moving from bucket i
-	// to bucket i+1 on a cache hit (bucket 0 always promotes).
-	promoteThreshold [numBuckets]float64
-
-	// index is a map of keys to bucket indexes.
-	index map[K]int8
-
-	// bucket[0] holds items that have been accessed once. bucket[N] holds items
-	// that have been accessed ~0.01^N times.
-	buckets [numBuckets]map[K]V
+	shards []*lfuShard[K, V]
+	seed   maphash.Seed
 }
 
 // New returns a new Cache ready for use with a maximum capacity of size
 // items. A size of 0 disables caching: Set does not retain entries and Get
 // always misses.
 func New[K comparable, V any](size int) *Cache[K, V] {
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	return NewSharded[K, V](size, 1)
+}
 
-	buckets := [numBuckets]map[K]V{}
-	for i := range buckets {
-		buckets[i] = map[K]V{}
+// NewSharded returns a cache with up to numShards stripes. The sum of per-shard
+// limits is at least size (often slightly more per shard to absorb hash skew),
+// so the cache may hold more than size entries under a striped layout. When
+// size is small relative to numShards, fewer stripes are used so each holds at
+// least about minKeysPerShard items on average.
+//
+// Key-to-shard routing uses hash/maphash with a per-cache random seed. int and
+// other common primitive keys use fast encodings; other comparable types fall
+// back to a string representation for hashing.
+func NewSharded[K comparable, V any](size, numShards int) *Cache[K, V] {
+	if numShards < 1 {
+		panic("lfu: numShards must be at least 1")
 	}
-
-	var th [numBuckets]float64
-	for i := int8(1); i < numBuckets; i++ {
-		th[i] = math.Pow(promoteBase, float64(i))
+	effective := numShards
+	if size == 0 {
+		effective = 1
+	} else {
+		maxStripes := size / minKeysPerShard
+		if maxStripes < 1 {
+			maxStripes = 1
+		}
+		if effective > maxStripes {
+			effective = maxStripes
+		}
 	}
-
+	caps := distributeCapacity(size, effective)
+	shards := make([]*lfuShard[K, V], effective)
+	for i := range shards {
+		shards[i] = newLFUShard[K, V](caps[i])
+	}
 	return &Cache[K, V]{
-		size:               size,
-		rng:                rng,
-		promoteThreshold:   th,
-		index:              map[K]int8{},
-		buckets:            buckets,
+		shards: shards,
+		seed:   maphash.MakeSeed(),
 	}
+}
+
+func distributeCapacity(size, n int) []int {
+	caps := make([]int, n)
+	if n == 0 || size == 0 {
+		return caps
+	}
+	if n == 1 {
+		caps[0] = size
+		return caps
+	}
+	// Ceil(size/n) per shard plus slack: hashing is not perfectly uniform, so a
+	// tight sum==size split can overflow a shard during load and evict keys that
+	// other stripes still have room for. Total max entries can exceed size.
+	base := (size + n - 1) / n
+	slack := max(512, min(2048, max(1, base/4)))
+	for i := range caps {
+		caps[i] = base + slack
+	}
+	return caps
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func (c *Cache[K, V]) shardIndex(key K) int {
+	if len(c.shards) == 1 {
+		return 0
+	}
+	var h maphash.Hash
+	h.SetSeed(c.seed)
+	writeKey(&h, key)
+	return int(h.Sum64() % uint64(len(c.shards)))
 }
 
 // Get returns a value from the cache if it exists. If the value does not
 // exist, ok is false.
 func (c *Cache[K, V]) Get(key K) (v V, ok bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	i, ok := c.index[key]
-	if !ok {
-		// Cache miss
-		return v, false
-	}
-
-	// Cache hit
-	v = c.buckets[i][key]
-
-	// Probabilistically "spill" the item to a more frequently accessed
-	// bucket. First bucket is single-access items.
-	if i == 0 || (i < maxBucketIndex && c.rng.Float64() < c.promoteThreshold[i]) {
-		c.promote(i, key)
-	}
-
-	return v, true
+	return c.shards[c.shardIndex(key)].get(key)
 }
 
 // Peek returns a value from the cache if it exists, without updating its
 // access frequency. If the value does not exist, ok is false.
 func (c *Cache[K, V]) Peek(key K) (v V, ok bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	i, ok := c.index[key]
-	if !ok {
-		return v, false
-	}
-	return c.buckets[i][key], true
-}
-
-func (c *Cache[K, V]) promote(i int8, key K) {
-	c.buckets[i+1][key] = c.buckets[i][key]
-	c.index[key] = i + 1
-	delete(c.buckets[i], key)
+	return c.shards[c.shardIndex(key)].peek(key)
 }
 
 // Set adds or updates a value in the cache. If the key already exists, its
@@ -118,83 +146,28 @@ func (c *Cache[K, V]) promote(i int8, key K) {
 // to be the least frequently used item because LFU uses a probabilistic
 // approach to tracking item access frequency.
 func (c *Cache[K, V]) Set(key K, value V) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.size == 0 {
-		if i, ok := c.index[key]; ok {
-			delete(c.index, key)
-			delete(c.buckets[i], key)
-		}
-		return
-	}
-
-	if i, ok := c.index[key]; ok {
-		c.reset(i, key, value)
-		return
-	}
-
-	if c.size > 0 && len(c.index) == c.size {
-		c.evict()
-	}
-
-	c.add(key, value)
+	c.shards[c.shardIndex(key)].set(key, value)
 }
 
-func (c *Cache[K, V]) reset(i int8, key K, value V) {
-	c.buckets[0][key] = value
-	if i > 0 {
-		delete(c.buckets[i], key)
-		c.index[key] = 0
-	}
-}
-
-func (c *Cache[K, V]) add(k K, v V) {
-	c.buckets[0][k] = v
-	c.index[k] = 0
-}
-
-func (c *Cache[K, V]) evict() {
-	for _, bucket := range c.buckets {
-		for k := range bucket {
-			// Map iteration order is undefined, so there are no guarantees as to
-			// whether the first item is random, oldest, etc. This is fine for our use
-			// case. Guaranteeing a random item or the actual least-frequently-used
-			// item would require a more complex data structure, additional work, etc.
-			delete(c.index, k)
-			delete(bucket, k)
-			return
-		}
-	}
-}
-
+// Remove deletes a key from the cache. It returns true if the key was present.
 func (c *Cache[K, V]) Remove(key K) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if i, ok := c.index[key]; ok {
-		delete(c.index, key)
-		delete(c.buckets[i], key)
-		return true
-	}
-
-	return false
+	return c.shards[c.shardIndex(key)].remove(key)
 }
 
 // Clear removes all entries from the cache.
 func (c *Cache[K, V]) Clear() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.index = map[K]int8{}
-	for i := range c.buckets {
-		c.buckets[i] = map[K]V{}
+	for _, s := range c.shards {
+		s.clear()
 	}
 }
 
+// Len returns the number of entries in the cache.
 func (c *Cache[K, V]) Len() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	return len(c.index)
+	n := 0
+	for _, s := range c.shards {
+		s.mu.Lock()
+		n += s.lenLocked()
+		s.mu.Unlock()
+	}
+	return n
 }

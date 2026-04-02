@@ -15,6 +15,15 @@ func TestCache(t *testing.T) {
 	}
 }
 
+func TestShardedCache(t *testing.T) {
+	err := cachetest.TestCache(func(size int) cachetest.Cache[int, int] {
+		return NewSharded[int, int](size, 32)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestZeroCapacityDoesNotRetain(t *testing.T) {
 	c := New[int, int](0)
 	for i := 0; i < 1000; i++ {
