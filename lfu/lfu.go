@@ -40,7 +40,8 @@ type Cache[K comparable, V any] struct {
 }
 
 // New returns a new Cache ready for use with a maximum capacity of size
-// items. size of 0 disables caching behavior.
+// items. A size of 0 disables caching: Set does not retain entries and Get
+// always misses.
 func New[K comparable, V any](size int) *Cache[K, V] {
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
@@ -57,8 +58,8 @@ func New[K comparable, V any](size int) *Cache[K, V] {
 	}
 }
 
-// Get returns a value from the cache if it exists and has not expired. If the
-// value does not exist or has expired, ok is false.
+// Get returns a value from the cache if it exists. If the value does not
+// exist, ok is false.
 func (c *Cache[K, V]) Get(key K) (v V, ok bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -109,6 +110,14 @@ func (c *Cache[K, V]) promote(i int8, key K) {
 func (c *Cache[K, V]) Set(key K, value V) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if c.size == 0 {
+		if i, ok := c.index[key]; ok {
+			delete(c.index, key)
+			delete(c.buckets[i], key)
+		}
+		return
+	}
 
 	if i, ok := c.index[key]; ok {
 		c.reset(i, key, value)
