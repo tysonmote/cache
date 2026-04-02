@@ -85,10 +85,14 @@ func testCacheEviction(c Cache[int, int]) error {
 // testCacheEvictionPolicy verifies that when the cache is full and a new key is
 // added, a less-frequently or less-recently used key is evicted (e.g. for LFU
 // the key with fewer accesses, for LRU the least recently used).
+//
+// For probabilistic frequency caches, key 1 must be promoted far enough that
+// key 2 (only touched by its initial Set) is the more likely victim; the loop
+// length is chosen to make accidental failure vanishingly small.
 func testCacheEvictionPolicy(c Cache[int, int]) error {
 	c.Set(1, 1)
 	c.Set(2, 2)
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 500; i++ {
 		c.Get(1)
 	}
 	c.Set(3, 3)
