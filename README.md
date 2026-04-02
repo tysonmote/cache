@@ -11,20 +11,23 @@ commonly-used test traces.
 
 ## Benchmarks
 
-TODO
+The `bench` package compares this repository’s `lfu` implementation with
+HashiCorp’s LRU, 2Q, and ARC caches using the shared scenarios in `cachetest`.
 
 ### Running
 
 ```
-# Throughput
+# Throughput (and allocation stats via -benchmem)
 go test ./bench -bench=. -benchmem
-
-# Hit ratios
-TODO
-
-# Memory overhead
-TODO
 ```
+
+Hit ratio depends on your workload and trace. Use the `trace` package to read
+standard `.arc` or `.lirs` traces, drive your cache with the decoded keys, and
+compare hits to total accesses for the metric you care about.
+
+`go test -benchmem` reports bytes allocated per operation and allocs per run,
+which is a practical way to compare memory overhead between implementations in
+these benchmarks.
 
 ## Packages
 
