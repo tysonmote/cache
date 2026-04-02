@@ -34,7 +34,8 @@ TODO
 least-frequently-used eviction policy. If the cache is full and a new item is
 added, a less-frequently used item is evicted to make room. The item evicted is
 not guaranteed to be the least frequently used item because Cache uses a
-probabilistic approach to tracking item access frequency.
+probabilistic approach to tracking item access frequency. A maximum size of
+zero disables caching: `Set` does not retain entries and `Get` always misses.
 
 The probabilistic eviction policy is faster and more memory efficient than the
 approach described in ["An O(1) algorithm for implementing the Cache cache
