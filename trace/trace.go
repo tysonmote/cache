@@ -10,8 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"unsafe"
 )
+
+// maxScanToken is the maximum length of a single line in a trace file
+// (bufio.Scanner token). Large traces use one integer per line well under this.
+const maxScanToken = 16 * 1024 * 1024
 
 // Trace is a trace file that contains a sequence of integers representing a
 // sequence of cache accesses.
@@ -26,35 +29,39 @@ type reader interface {
 
 // Open opens a Trace file at the given path. The file may be gzipped. The file type is determined by the file extension.
 func Open(path string) (*Trace, error) {
-	trace := &Trace{}
-
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	trace.closers = append(trace.closers, f)
+
+	closers := []io.Closer{f}
+	closeAll := func() {
+		for i := len(closers) - 1; i >= 0; i-- {
+			_ = closers[i].Close()
+		}
+	}
 
 	var r io.Reader = f
-
 	if filepath.Ext(path) == ".gz" {
-		r, err = gzip.NewReader(f)
+		gr, err := gzip.NewReader(f)
 		if err != nil {
+			closeAll()
 			return nil, err
 		}
-		trace.closers = append(trace.closers, r.(io.Closer))
+		closers = append(closers, gr)
+		r = gr
 		path = path[:len(path)-3]
 	}
 
 	switch filepath.Ext(path) {
 	case ".arc":
-		trace.r = newARCReader(r)
+		return &Trace{r: newARCReader(r), closers: closers}, nil
 	case ".lirs":
-		trace.r = newLIRSReader(r)
+		return &Trace{r: newLIRSReader(r), closers: closers}, nil
 	default:
+		closeAll()
 		return nil, fmt.Errorf("unknown trace file type: %s", filepath.Ext(path))
 	}
-
-	return trace, nil
 }
 
 // Read reads up to len(k) integers from the trace file into k. It returns the
@@ -75,6 +82,13 @@ func (t *Trace) Close() error {
 	return errors.Join(errs...)
 }
 
+func newScanner(r io.Reader) *bufio.Scanner {
+	s := bufio.NewScanner(r)
+	buf := make([]byte, 0, bufio.MaxScanTokenSize)
+	s.Buffer(buf, maxScanToken)
+	return s
+}
+
 // arcReader reads ARC trace files: https://scinapse.io/papers/1860107648
 type arcReader struct {
 	scanner *bufio.Scanner
@@ -83,8 +97,7 @@ type arcReader struct {
 }
 
 func newARCReader(r io.Reader) *arcReader {
-	scanner := bufio.NewScanner(r)
-	return &arcReader{scanner: scanner}
+	return &arcReader{scanner: newScanner(r)}
 }
 
 var arcSep = []byte(" ")
@@ -123,7 +136,7 @@ func chompInt(line []byte) (int, []byte, bool) {
 		return 0, nil, false
 	}
 
-	n, err := strconv.Atoi(unsafe.String(&line[0], sep))
+	n, err := strconv.Atoi(string(line[:sep]))
 	if err != nil {
 		return 0, nil, false
 	}
@@ -138,8 +151,7 @@ type lirsReader struct {
 }
 
 func newLIRSReader(r io.Reader) *lirsReader {
-	scanner := bufio.NewScanner(r)
-	return &lirsReader{scanner: scanner}
+	return &lirsReader{scanner: newScanner(r)}
 }
 
 func (r *lirsReader) Read(keys []int) (n int, err error) {
@@ -149,7 +161,7 @@ func (r *lirsReader) Read(keys []int) (n int, err error) {
 			return i, err
 		}
 
-		k, err := strconv.Atoi(unsafe.String(&line[0], len(line)))
+		k, err := strconv.Atoi(string(line))
 		if err != nil {
 			return i, err
 		}
@@ -163,11 +175,11 @@ func (r *lirsReader) Read(keys []int) (n int, err error) {
 func readLine(s *bufio.Scanner) ([]byte, error) {
 	for {
 		if !s.Scan() {
-			if err := s.Err(); err == nil {
+			scanErr := s.Err()
+			if scanErr == nil {
 				return nil, io.EOF
-			} else {
-				return nil, err
 			}
+			return nil, scanErr
 		}
 
 		line := s.Bytes()
