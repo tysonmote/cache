@@ -31,6 +31,10 @@ type Cache[K comparable, V any] struct {
 	rng  *rand.Rand
 	mu   sync.Mutex
 
+	// promoteThreshold[i] is the probability threshold for moving from bucket i
+	// to bucket i+1 on a cache hit (bucket 0 always promotes).
+	promoteThreshold [numBuckets]float64
+
 	// index is a map of keys to bucket indexes.
 	index map[K]int8
 
@@ -50,11 +54,17 @@ func New[K comparable, V any](size int) *Cache[K, V] {
 		buckets[i] = map[K]V{}
 	}
 
+	var th [numBuckets]float64
+	for i := int8(1); i < numBuckets; i++ {
+		th[i] = math.Pow(promoteBase, float64(i))
+	}
+
 	return &Cache[K, V]{
-		size:    size,
-		rng:     rng,
-		index:   map[K]int8{},
-		buckets: buckets,
+		size:               size,
+		rng:                rng,
+		promoteThreshold:   th,
+		index:              map[K]int8{},
+		buckets:            buckets,
 	}
 }
 
@@ -75,7 +85,7 @@ func (c *Cache[K, V]) Get(key K) (v V, ok bool) {
 
 	// Probabilistically "spill" the item to a more frequently accessed
 	// bucket. First bucket is single-access items.
-	if i == 0 || (i < maxBucketIndex && c.rng.Float64() < math.Pow(promoteBase, float64(i))) {
+	if i == 0 || (i < maxBucketIndex && c.rng.Float64() < c.promoteThreshold[i]) {
 		c.promote(i, key)
 	}
 
